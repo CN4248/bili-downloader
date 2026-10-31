@@ -1,0 +1,25 @@
+# 本地环境与敏感数据（真实 SESSDATA/cookie 只可能出现在这里）
+.env
+data/*
+!data/.gitkeep
+
+# 构建产物（含自签名 keystore，以及打包后的固件/可执行文件）
+dist/
+build/
+*.egg-info/
+
+# 运行时下载目录
+downloads/*
+!downloads/.gitkeep
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 杂项
+*.log
+.DS_Store
+Thumbs.db
