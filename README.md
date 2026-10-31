@@ -11,8 +11,6 @@
 
 界面是同一个 **WebUI**（纯标准库 HTTP 服务 + 原生 JS，无框架、无 CDN 依赖）。
 
-> 仓库里**不含** `dist/` 构建产物（exe / apk 体积较大，也不适合进版本库）：按 [第 9 节](#9-从源码运行--重新打包) 自行构建，或到 Releases 页面下载。
-
 ![首页](docs/screenshots/webui-01.png)
 
 ---
@@ -27,7 +25,7 @@
   - 拿不到目标清晰度（如未登录）时，自动退回该账号能拿到的最高 progressive（mp4 直链）。
 - **下载目录可自定义**，**视频与图文分别独立设置**：
   - 默认：视频 = 根目录，图文 = 根目录/图文；
-  - Docker：根目录 = `/download` → 宿主机 `/volume1/video/Download`。
+  - Docker：根目录 = `/download` → 宿主机 `/mnt/media/video`。
 - **登录两种方式**：
   - B站 App **扫码授权登录**（二维码由 `passport.bilibili.com` 生成，轮询状态，成功后 Cookie 自动持久化）；
   - **手动粘贴 Cookie**（`SESSDATA=...; bili_jct=...`，也支持浏览器插件导出的 JSON）。
@@ -124,7 +122,7 @@ docker compose logs -f bilidl    # 看日志
 `--test`（部署后跑一次解析自测）、`--logs`、`--down`。
 
 - 端口 **2196**（`.env` 里 `BILIDL_PORT` 可改外层端口），`network_mode: bridge`；
-- 宿主机下载目录：`.env` 的 `BILIDL_HOST_DOWNLOAD`（默认 `/volume1/video/Download`）→ 容器 `/download`；
+- 宿主机下载目录：`.env` 的 `BILIDL_HOST_DOWNLOAD`（默认 `/mnt/media/video`）→ 容器 `/download`；
 - 配置与 Cookie：`./data:/app/data`；
 - 群晖 / NAS 上逐步部署（含 Container Manager 图形界面、权限、BuildKit、常见报错）见
   **[docs/DEPLOY-SYNOLOGY.md](docs/DEPLOY-SYNOLOGY.md)**；
@@ -496,18 +494,6 @@ B站 图文页会把同一张图渲染两遍（SSR + hydration），旧实现数
 > 这是服务端修改，Docker 需 `docker compose up -d --build` 重建后生效；油猴脚本版本不变。
 
 
-### 3.4.0.21 评论区「9 张只挂 8 张」的剩余三种情况（主版 1.7.29 / 独立版 1.2.46）
-
-九宫格最多铺 8 张，第 9 张折进「+1」遮罩，DOM 里根本没有 —— 这一点 1.7.14/1.7.15 已经补过，但下面三种情况仍会退回 8 张：
-
-1. **楼中楼**：二级评论的图以前只并进「父评论」的 key，子评论拿自己的 rpid 查不到 → 永远 8 张。现在子评论会按自己的 rpid 单独建档，同时也并进父评论（父评论的九宫格会一起铺开）。
-2. **接口 http / DOM https**：`content.pictures[].img_src` 返回的是 `http://i0.hdslb.com/...`，DOM 里的地址统一是 https；以前「按图片 URL 反查评论」拿原始地址当 key，永远匹配不上。现在接口地址也走 `cmtNorm` 规范化。
-3. **只扫了前 3 页评论**：滚动后才加载的评论不在映射里。现在九宫格满 8 张、又补不到更长列表时，会按 rpid 额外查一次 `/x/v2/reply/reply?root=<rpid>` 拿整条评论串（根评论 + 楼中楼），命中后缓存，普通 3 张图不会多发请求。
-
-按钮数量与下载列表都以「DOM 列表 ∪ 接口列表」为准，前 8 张顺序跟界面一致，第 9 张追加在后面。
-回归测试：`node tests/cmt_pics_count_test.js`（旧实现会停在 8 张，测试会红）。
-
-
 ### 3.10 刷新页面不丢进度（底部悬浮进度条）
 
 WebUI 会全局轮询任务状态，并在底部显示 `正在下载 N 个 · 72%` 的悬浮条——**F5 刷新后仍然显示**，点「查看」进任务队列，点「×」只收起提示。
@@ -546,17 +532,6 @@ WebUI 会全局轮询任务状态，并在底部显示 `正在下载 N 个 · 72
 - 单分集视频不显示分集缩略图（首帧经常是黑帧），视频卡片本身有大封面。
 - 接口给的 `http://` 封面统一升级为 `https://`；图片挂了会自动回落视频封面，不会留黑块。
 
-
-### 3.16 任务队列：全部暂停 / 全部开始 / 多选操作
-
-任务队列页顶部新增「**全部暂停**」「**全部开始**」；每条任务左侧有勾选框，顶部工具条有「全选 / 已选 N 项 / 暂停选中 / 开始选中 / 取消选中」，单条任务行右侧也有「暂停 / 开始 / 取消」。
-
-- **暂停**：排队中的任务立刻变「已暂停」；正在下载的任务会在下一个分片检查点停下再变「已暂停」（FFmpeg 合并阶段要等合并完成，不会强杀）。
-- **继续**（全部开始 / 开始选中 / 单条「开始」）：暂停任务重新排队，从 0 开始下载。暂停时未下完的 `.part` 会被丢弃，所以是重新下而不是断点续传。
-- **暂停状态会持久化**：容器重启后暂停的任务仍然是暂停，不会被自动跑起来；排队中（pending）的任务照旧自动恢复。日志里会提示「有 N 个任务处于暂停状态」。
-- **取消**：选中/单条取消只把状态置为「已取消」（留在列表里）；「取消全部任务」仍是直接清空队列。
-- 接口：`POST /api/tasks/pause`、`POST /api/tasks/resume`，body 支持 `{"all": true}`、`{"ids": ["id1","id2"]}` 或 `{"id": "..."}`；`POST /api/tasks/cancel` 也支持 `ids` 多选，返回 `{"count": N}`。
-
 ## 4. 命令行 / API 速查
 
 所有能力都在 HTTP API 上（WebUI、App、油猴脚本共用）：
@@ -568,9 +543,7 @@ WebUI 会全局轮询任务状态，并在底部显示 `正在下载 N 个 · 72
 | GET | `/api/tasks` | 任务列表 + 进度 + 风控冷却 |
 | POST | `/api/parse` | `{"text": "链接1\n链接2"}` → 解析结果（含分集 / 合集 / 图片数） |
 | POST | `/api/download` | `{"videos":[{bvid,cid,page_index}], "opus":[{oid,sub_kind}]}` 或 `{"video_idents":["BV..."]}` |
-| POST | `/api/tasks/cancel` | `{"id":"..."}` 取消单个；`{"ids":[...]}` 取消多选，返回 `{"count":N}`；`{"all":true}` 取消并**从队列删除**全部，返回 `{"removed":N}` |
-| POST | `/api/tasks/pause` | `{"id":"..."}` / `{"ids":[...]}` / `{"all":true}` 暂停，返回 `{"paused":N}` |
-| POST | `/api/tasks/resume` | `{"id":"..."}` / `{"ids":[...]}` / `{"all":true}` 继续已暂停任务，返回 `{"resumed":N}` |
+| POST | `/api/tasks/cancel` | `{"id":"..."}` 取消单个；`{"all":true}` 取消并**从队列删除**全部，返回 `{"removed":N}` |
 | POST | `/api/tasks/clear` | 清除已完成 |
 | POST | `/api/settings` | 保存设置（部分字段即可） |
 | POST | `/api/login/cookie` | `{"cookie":"SESSDATA=...; bili_jct=..."}`（先验证再落盘） |
@@ -611,12 +584,10 @@ bili-downloader/
 ├── tampermonkey/           油猴脚本
 ├── android-app/            手机独立版 APK 源码（Java 引擎 + 内置 WebUI）
 ├── android/                旧版 APK 源码（WebView 壳，已弃用）
-├── build/                  win_entry.py、图标（签名 keystore 不入库，构建时自动生成）
-├── dist/                   构建产物目录（不入库，打包后生成）
+├── build/                  win_entry.py、图标、APK 签名用 keystore
+├── dist/                   BiliDL.apk、win/BiliDL.exe + ffmpeg.exe
 ├── tests/                  接口 / 端到端验收脚本
-├── data/                   运行数据（Cookie / 队列 / 订阅，已 gitignore；只保留 .gitkeep）
-├── LICENSE                 MIT 许可证
-└── docs/                   部署说明、验收报告、界面截图
+└── docs/screenshots/       界面截图
 ```
 
 ---
@@ -718,7 +689,7 @@ python tests/final_test.py http://127.0.0.1:2196 /tmp/dltest
 ## 任务队列持久化（2.2.11+）
 
 - 任务队列写在 `data/queue.json`（`BILIDL_DATA_DIR`，Docker 为 `/app/data`），原子替换写入。
-- 容器重启/重建后：`pending` 任务自动重新入队；`paused` 保持暂停（不会自己开跑，可在任务页点「全部开始」继续）；`running` 任务标为失败（进程已随容器退出）；`done/skipped/error/canceled` 全部保留。
+- 容器重启/重建后：`pending` 任务自动重新入队；`running` 任务标为失败（进程已随容器退出）；`done/skipped/error/canceled` 全部保留。
 - 不要用 `docker compose down -v` 删除绑定目录；`docker compose up -d --build` 不会清空 `./data`。
 
 ### 图文文件名里 `<opus_author>` 为空
@@ -726,14 +697,3 @@ python tests/final_test.py http://127.0.0.1:2196 /tmp/dltest
 旧动态转成的 opus（`/opus/<id>` 打开后接口返回 `item=null` + `fallback`）会走页面 SSR 兜底。
 旧版兜底只取了标题/图片，没有解析 `MODULE_TYPE_AUTHOR.module_author`，所以 `<opus_author>` 为空；
 新版已从 SSR 的 modules 里补取作者昵称、UID 与发布时间，`<opus_author>` / `<opus_date>` 都能正常使用。
-
----
-
-## 11. 开源许可
-
-本项目以 **MIT License** 发布，完整文本见 [LICENSE](LICENSE)。
-
-第三方组件：
-
-- [`org.json`](https://github.com/douglascrockford/JSON-java)（`android-app/lib/json.jar`，JSON License）—— 只用于 Android 独立版 APK 构建；
-- [`httpx`](https://www.python-httpx.org/)（BSD-3-Clause）与 [`qrcode`](https://github.com/lincolnloop/python-qrcode)（BSD）—— 服务端运行依赖，见 `requirements.txt`。
