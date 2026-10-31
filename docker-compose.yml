@@ -1,0 +1,49 @@
+# BiliDL · 带 WebUI 的 B站视频 / 动态图文下载器
+#
+#   部署（在项目根目录，也就是本文件所在目录）：
+#     docker compose up -d --build          # 或 docker-compose up -d --build
+#   然后打开：
+#     http://<这台 NAS / 服务器的 IP>:2196
+#
+# 说明：
+#   * 端口 2196，network_mode: bridge；
+#   * 宿主机下载目录通过 BILIDL_HOST_DOWNLOAD 指定（见 .env），
+#     挂到容器内 /download：视频默认存 /download，图文默认存 /download/图文，
+#     两者都可以在「下载设置」里再分别改；
+#   * 第一次构建会拉 python:3.12-slim 与 ffmpeg；之后重建只会重跑最后几层。
+services:
+  bilidl:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        # 国内镜像源（想换回官方源就改成 deb.debian.org / https://pypi.org/simple）
+        DEBIAN_MIRROR: mirrors.tuna.tsinghua.edu.cn
+        PIP_INDEX: https://pypi.tuna.tsinghua.edu.cn/simple
+    image: bilidl:1.0.0
+    container_name: bilidl
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      # 左边是宿主机端口，右边是容器内固定端口
+      - "${BILIDL_PORT:-2196}:2196"
+    environment:
+      TZ: Asia/Shanghai
+      BILIDL_PORT: "2196"
+      BILIDL_DOWNLOAD_DIR: /download
+      BILIDL_DATA_DIR: /app/data
+    volumes:
+      # 左侧是宿主机真实下载目录（改 .env 里的 BILIDL_HOST_DOWNLOAD），右侧固定为容器内 /download
+      - "${BILIDL_HOST_DOWNLOAD:-/volume1/video/Download}:/download"
+      # 设置 / Cookie / 临时文件（cookie.txt 只存在这里，注意备份）
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:2196/api/health', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
